@@ -1,0 +1,86 @@
+
+name: Inspect Infinix Firmware Kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download firmware release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p images
+
+          gh release download firmware-v1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "boot.img" \
+            --dir images
+
+          gh release download firmware-v1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "vendor_boot.img" \
+            --dir images
+
+          ls -lh images
+
+      - name: Install inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 binutils
+
+      - name: Download Android boot image tools
+        run: |
+          git clone --depth=1 \
+            https://android.googlesource.com/platform/system/tools/mkbootimg \
+            boot-tools
+
+      - name: Unpack firmware images
+        run: |
+          mkdir -p unpacked/boot unpacked/vendor_boot
+
+          python3 boot-tools/unpack_bootimg.py \
+            --boot_img images/boot.img \
+            --out unpacked/boot
+
+          python3 boot-tools/unpack_bootimg.py \
+            --boot_img images/vendor_boot.img \
+            --out unpacked/vendor_boot
+
+      - name: Inspect actual phone kernel
+        run: |
+          echo "=== KERNEL VERSION ==="
+          strings unpacked/boot/kernel | grep -m 3 "Linux version" || true
+
+          echo "=== KERNEL IMAGE ==="
+          file unpacked/boot/kernel
+
+      - name: Extract kernel configuration
+        run: |
+          git clone --depth=1 \
+            --branch android12-5.10-2024-05_r1 \
+            https://android.googlesource.com/kernel/common.git \
+            kernel
+
+          if kernel/scripts/extract-ikconfig \
+            unpacked/boot/kernel > phone.config; then
+
+            echo "=== CONFIGURATION FOUND ==="
+
+            grep -E \
+              '^(CONFIG_LOCALVERSION|CONFIG_MODULES|CONFIG_MODVERSIONS|CONFIG_IKCONFIG|CONFIG_CFG80211|CONFIG_MAC80211|CONFIG_MT7601U)=' \
+              phone.config || true
+          else
+            echo "IKCONFIG NOT FOUND IN PHONE KERNEL"
+          fi
+
+      - name: Inspect vendor boot contents
+        run: |
+          echo "=== VENDOR BOOT FILES ==="
+          find unpacked/vendor_boot -maxdepth 2 -type f -exec ls -lh {} \;
