@@ -1,1 +1,37 @@
 
+name: Check MT7601U Driver
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone Google Kernel
+        run: |
+          git clone --depth=1 \
+            --branch android12-5.10-2024-05_r1 \
+            https://android.googlesource.com/kernel/common.git kernel
+
+      - name: Check MT7601U
+        run: |
+          cd kernel
+
+          DRIVER="drivers/net/wireless/mediatek/mt7601u"
+
+          if [ -d "$DRIVER" ]; then
+            echo "MT7601U DRIVER: FOUND"
+            find "$DRIVER" -maxdepth 1 -type f
+          else
+            echo "MT7601U DRIVER: NOT FOUND"
+            exit 1
+          fi
+
+          echo "=== KCONFIG ==="
+          grep -R -n -A12 "config MT7601U" \
+            drivers/net/wireless/mediatek
