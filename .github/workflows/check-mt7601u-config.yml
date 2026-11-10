@@ -43,8 +43,8 @@ jobs:
             --enable WLAN_VENDOR_MEDIATEK \
             --module CFG80211 \
             --module MAC80211 \
-            --module MT7601U  
-            
+            --module MT7601U
+
           make O=out ARCH=arm64 olddefconfig
 
       - name: Verify MT7601U configuration
