@@ -17,20 +17,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             bc bison flex libssl-dev libelf-dev \
-            build-essential clang lld llvm
+            build-essential clang lld llvm \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
 
       - name: Download Google Kernel
         run: |
           TAG=android12-5.10-2024-05_r1
+
           git init kernel
           git -C kernel remote add origin https://android.googlesource.com/kernel/common.git
           git -C kernel fetch --depth=1 origin "refs/tags/$TAG"
           git -C kernel checkout --detach FETCH_HEAD
 
+          git -C kernel show -s --format='%H %s'
+
       - name: Configure kernel
         run: |
           cd kernel
-          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+
+          make O=out ARCH=arm64 LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
 
           scripts/config --file out/.config \
             --enable MODULES \
@@ -44,22 +51,40 @@ jobs:
             --module MAC80211 \
             --module MT7601U
 
-          make O=out ARCH=arm64 LLVM=1 olddefconfig
+          make O=out ARCH=arm64 LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
-          grep -q '^CONFIG_MT7601U=m$' out/.config
+          grep '^CONFIG_MT7601U=m$' out/.config
+
+      - name: Prepare kernel
+        run: |
+          cd kernel
+
+          make O=out ARCH=arm64 LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -j2 modules_prepare
 
       - name: Build MT7601U
         run: |
           cd kernel
-          make O=out ARCH=arm64 LLVM=1 -j2 \
-            drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+
+          make O=out ARCH=arm64 LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -j2 drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
 
       - name: Verify module
         run: |
-          find kernel/out -name mt7601u.ko -print
-          test -f kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+          MODULE=kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
 
-      - name: Upload module
+          if [ ! -f "$MODULE" ]; then
+            echo "ERROR: mt7601u.ko not found"
+            exit 1
+          fi
+
+          file "$MODULE"
+          ls -lh "$MODULE"
+
+      - name: Upload MT7601U module
         uses: actions/upload-artifact@v4
         with:
           name: mt7601u-module
