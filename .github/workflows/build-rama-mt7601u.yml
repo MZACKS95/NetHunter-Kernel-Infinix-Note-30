@@ -1,0 +1,91 @@
+
+name: Build Rama GKI with NetHunter WiFi
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git bc bison flex build-essential \
+            libssl-dev libelf-dev libncurses-dev \
+            clang lld llvm gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu python3 \
+            pahole cpio rsync
+
+      - name: Clone Rama kernel source
+        run: |
+          git clone --depth=1 \
+            --branch android12-5.10 \
+            https://github.com/ramabondanp/android_kernel_common-5.10.git kernel
+
+      - name: Configure kernel
+        working-directory: kernel
+        run: |
+          set -e
+
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+
+          scripts/config --file out/.config \
+            --enable MODULES \
+            --enable USB_SUPPORT \
+            --enable USB \
+            --enable WLAN \
+            --module CFG80211 \
+            --module MAC80211 \
+            --enable WLAN_VENDOR_MEDIATEK \
+            --module MT7601U
+
+          make O=out ARCH=arm64 LLVM=1 olddefconfig
+
+          echo "=== WIFI CONFIGURATION ==="
+          grep -E 'CONFIG_(MODULES|USB=|WLAN=|CFG80211=|MAC80211=|WLAN_VENDOR_MEDIATEK=|MT7601U=)' out/.config
+
+          grep -q '^CONFIG_CFG80211=m' out/.config
+          grep -q '^CONFIG_MAC80211=m' out/.config
+          grep -q '^CONFIG_MT7601U=m' out/.config
+
+      - name: Compile kernel and modules
+        working-directory: kernel
+        run: |
+          set -e
+          make -j2 O=out ARCH=arm64 LLVM=1 \
+            Image modules
+
+      - name: Collect build results
+        working-directory: kernel
+        run: |
+          set -e
+
+          mkdir -p ../release/modules
+
+          find out -name '*.ko' -exec cp --parents {} ../release/modules/ \;
+
+          cp out/.config ../release/kernel.config
+          cp out/Module.symvers ../release/Module.symvers
+          cp out/System.map ../release/System.map
+          cp out/arch/arm64/boot/Image ../release/Image
+
+          echo "=== KERNEL ==="
+          file ../release/Image
+
+          echo "=== MT7601U MODULE ==="
+          find out -name 'mt7601u.ko' -exec modinfo {} \;
+
+          find out -name 'mt7601u.ko' | grep -q .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rama-gki-mt7601u-build
+          path: release/
+          if-no-files-found: error
