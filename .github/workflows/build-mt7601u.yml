@@ -1,5 +1,5 @@
 
-name: Build MT7601U Module
+name: Build Google GKI 5.10.209 NetHunter
 
 on:
   workflow_dispatch:
@@ -9,36 +9,40 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison flex libssl-dev libelf-dev \
-            build-essential clang lld llvm \
+            git bc bison flex build-essential \
+            libssl-dev libelf-dev libncurses-dev \
+            clang-14 lld-14 llvm-14 \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu \
-            kmod
+            kmod pahole python3 cpio
 
-      - name: Download Google Kernel
+      - name: Download Google GKI 5.10.209
         run: |
           TAG=android12-5.10-2024-05_r1
 
           git init kernel
-          git -C kernel remote add origin https://android.googlesource.com/kernel/common.git
+          git -C kernel remote add origin \
+            https://android.googlesource.com/kernel/common.git
+
           git -C kernel fetch --depth=1 origin "refs/tags/$TAG"
           git -C kernel checkout --detach FETCH_HEAD
 
-          git -C kernel show -s --format='%H %s'
+          echo "=== SOURCE COMMIT ==="
+          git -C kernel rev-parse HEAD
 
-      - name: Configure kernel
+      - name: Configure NetHunter wireless
+        working-directory: kernel
         run: |
-          cd kernel
+          set -e
 
-          make O=out ARCH=arm64 LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make O=out ARCH=arm64 LLVM=-14 gki_defconfig
 
           scripts/config --file out/.config \
             --enable MODULES \
@@ -52,54 +56,54 @@ jobs:
             --module MAC80211 \
             --module MT7601U
 
-          make O=out ARCH=arm64 LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make O=out ARCH=arm64 LLVM=-14 olddefconfig
 
-          grep '^CONFIG_MT7601U=m$' out/.config
+          echo "=== WIRELESS CONFIG ==="
+          grep -E '^CONFIG_(MODULES|USB|WIRELESS|WLAN|CFG80211|MAC80211|WLAN_VENDOR_MEDIATEK|MT7601U)=' out/.config
 
-      - name: Prepare kernel
+          grep -q '^CONFIG_CFG80211=m$' out/.config
+          grep -q '^CONFIG_MAC80211=m$' out/.config
+          grep -q '^CONFIG_MT7601U=m$' out/.config
+
+      - name: Build kernel and modules
+        working-directory: kernel
         run: |
-          cd kernel
+          set -e
 
-          make O=out ARCH=arm64 LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            -j2 modules_prepare
+          make -j2 O=out ARCH=arm64 LLVM=-14 \
+            Image modules
 
-      - name: Build MT7601U
+      - name: Collect build output
+        working-directory: kernel
         run: |
-          cd kernel
+          set -e
 
-          make O=out ARCH=arm64 LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            -j2 drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+          mkdir -p ../release/modules
 
-      - name: Verify module
-        run: |
-          MODULE=kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+          cp out/arch/arm64/boot/Image ../release/Image
 
-          if [ ! -f "$MODULE" ]; then
-            echo "ERROR: mt7601u.ko not found"
-            exit 1
-          fi
+          gzip -n -9 -c out/arch/arm64/boot/Image \
+            > ../release/Image.gz
 
-          file "$MODULE"
-          ls -lh "$MODULE"
+          cp out/.config ../release/kernel.config
+          cp out/Module.symvers ../release/Module.symvers
+          cp out/System.map ../release/System.map
 
-      - name: Check Module Information
-        run: |
-          MODULE=kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+          find out -name '*.ko' \
+            -exec cp --parents {} ../release/modules/ \;
 
-          echo "=== MODULE INFORMATION ==="
-          modinfo "$MODULE"
+          echo "=== KERNEL ==="
+          file ../release/Image
 
-          echo "=== MODULE DEPENDENCIES ==="
-          modinfo -F depends "$MODULE"
+          echo "=== MT7601U MODULE ==="
+          find out -name 'mt7601u.ko' -exec modinfo {} \;
 
-          echo "=== MODULE VERMAGIC ==="
-          modinfo -F vermagic "$MODULE"
+          find out -name 'mt7601u.ko' | grep -q .
 
-      - name: Upload MT7601U module
+      - name: Upload kernel and modules
         uses: actions/upload-artifact@v4
         with:
-          name: mt7601u-module
-          path: kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+          name: google-gki-5.10.209-nethunter
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
