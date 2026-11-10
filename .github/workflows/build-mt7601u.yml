@@ -24,7 +24,7 @@ jobs:
             kmod pahole python3 cpio \
             curl tar xz-utils
 
-      - name: Download Android Clang r416183b
+      - name: Download Android Clang
         run: |
           set -e
 
@@ -34,12 +34,10 @@ jobs:
           git -C clang-toolchain remote add origin \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
 
-          git -C clang-toolchain \
-            -c protocol.version=2 fetch \
+          git -C clang-toolchain fetch \
             --depth=1 --filter=blob:none origin "$TOOLCHAIN_COMMIT"
 
           git -C clang-toolchain checkout --detach FETCH_HEAD
-
           git -C clang-toolchain sparse-checkout init --cone
           git -C clang-toolchain sparse-checkout set clang-r416183b
 
@@ -47,14 +45,13 @@ jobs:
 
           echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
 
-          echo "=== ANDROID CLANG VERSION ==="
           "$TOOLCHAIN/bin/clang" --version
           "$TOOLCHAIN/bin/ld.lld" --version
 
           test -x "$TOOLCHAIN/bin/clang"
           test -x "$TOOLCHAIN/bin/ld.lld"
 
-      - name: Download Google GKI 5.10.209
+      - name: Download Google Kernel
         run: |
           set -e
 
@@ -67,18 +64,20 @@ jobs:
           git -C kernel fetch --depth=1 origin "refs/tags/$TAG"
           git -C kernel checkout --detach FETCH_HEAD
 
-          echo "=== SOURCE COMMIT ==="
+          echo "=== KERNEL SOURCE ==="
           git -C kernel rev-parse HEAD
-
-          echo "=== KERNEL VERSION ==="
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' kernel/Makefile
 
-      - name: Configure NetHunter wireless
+      - name: Configure NetHunter
         working-directory: kernel
         run: |
           set -e
 
-          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+          make O=out ARCH=arm64 \
+            LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            gki_defconfig
 
           scripts/config --file out/.config \
             --enable MODULES \
@@ -92,9 +91,13 @@ jobs:
             --module MAC80211 \
             --module MT7601U
 
-          make O=out ARCH=arm64 LLVM=1 olddefconfig
+          make O=out ARCH=arm64 \
+            LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            olddefconfig
 
-          echo "=== WIRELESS CONFIG ==="
+          echo "=== CONFIGURATION ==="
           grep -E '^CONFIG_(MODULES|USB|WIRELESS|WLAN|CFG80211|MAC80211|WLAN_VENDOR_MEDIATEK|MT7601U)=' out/.config
 
           grep -q '^CONFIG_MODULES=y$' out/.config
@@ -102,16 +105,28 @@ jobs:
           grep -q '^CONFIG_MAC80211=m$' out/.config
           grep -q '^CONFIG_MT7601U=m$' out/.config
 
+      - name: Verify ARM64 compiler target
+        run: |
+          set -e
+
+          echo "=== CLANG VERSION ==="
+          clang --version
+
+          echo "=== ARM64 TARGET ==="
+          clang --target=aarch64-linux-gnu -dumpmachine
+
+          clang --target=aarch64-linux-gnu \
+            -dM -E -x c /dev/null | grep __aarch64__
+
       - name: Build kernel and modules
         working-directory: kernel
         run: |
           set -e
 
-          echo "=== BUILD TOOLCHAIN ==="
-          clang --version
-          ld.lld --version
-
-          make -j2 O=out ARCH=arm64 LLVM=1 \
+          make -j2 O=out ARCH=arm64 \
+            LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             Image modules
 
       - name: Collect build output
@@ -139,13 +154,14 @@ jobs:
 
           echo "=== MT7601U MODULE ==="
           MT_MODULE=$(find out -name mt7601u.ko | head -n 1)
+
           test -n "$MT_MODULE"
           modinfo "$MT_MODULE"
 
           echo "=== MODULE COUNT ==="
           find out -name '*.ko' | wc -l
 
-      - name: Upload kernel and modules
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: google-gki-5.10.209-nethunter
