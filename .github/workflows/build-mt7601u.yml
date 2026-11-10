@@ -19,7 +19,8 @@ jobs:
             bc bison flex libssl-dev libelf-dev \
             build-essential clang lld llvm \
             gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu \
+            kmod
 
       - name: Download Google Kernel
         run: |
@@ -83,6 +84,19 @@ jobs:
 
           file "$MODULE"
           ls -lh "$MODULE"
+
+      - name: Check Module Information
+        run: |
+          MODULE=kernel/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko
+
+          echo "=== MODULE INFORMATION ==="
+          modinfo "$MODULE"
+
+          echo "=== MODULE DEPENDENCIES ==="
+          modinfo -F depends "$MODULE"
+
+          echo "=== MODULE VERMAGIC ==="
+          modinfo -F vermagic "$MODULE"
 
       - name: Upload MT7601U module
         uses: actions/upload-artifact@v4
