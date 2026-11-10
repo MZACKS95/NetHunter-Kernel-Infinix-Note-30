@@ -19,18 +19,45 @@ jobs:
           sudo apt-get install -y \
             git bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
-            clang lld llvm \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu \
-            kmod pahole python3 cpio
+            kmod pahole python3 cpio \
+            curl tar xz-utils
 
-          echo "=== LLVM TOOLS ==="
-          clang --version
-          ld.lld --version
+      - name: Download Android Clang r416183b
+        run: |
+          set -e
+
+          TOOLCHAIN_COMMIT=b669748458572622ed716407611633c5415da25c
+
+          git init clang-toolchain
+          git -C clang-toolchain remote add origin \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
+
+          git -C clang-toolchain \
+            -c protocol.version=2 fetch \
+            --depth=1 --filter=blob:none origin "$TOOLCHAIN_COMMIT"
+
+          git -C clang-toolchain checkout --detach FETCH_HEAD
+
+          git -C clang-toolchain sparse-checkout init --cone
+          git -C clang-toolchain sparse-checkout set clang-r416183b
+
+          TOOLCHAIN="$GITHUB_WORKSPACE/clang-toolchain/clang-r416183b"
+
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+
+          echo "=== ANDROID CLANG VERSION ==="
+          "$TOOLCHAIN/bin/clang" --version
+          "$TOOLCHAIN/bin/ld.lld" --version
+
+          test -x "$TOOLCHAIN/bin/clang"
+          test -x "$TOOLCHAIN/bin/ld.lld"
 
       - name: Download Google GKI 5.10.209
         run: |
           set -e
+
           TAG=android12-5.10-2024-05_r1
 
           git init kernel
@@ -43,12 +70,13 @@ jobs:
           echo "=== SOURCE COMMIT ==="
           git -C kernel rev-parse HEAD
 
+          echo "=== KERNEL VERSION ==="
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' kernel/Makefile
+
       - name: Configure NetHunter wireless
         working-directory: kernel
         run: |
           set -e
-
-          export PATH="/usr/bin:$PATH"
 
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
@@ -69,6 +97,7 @@ jobs:
           echo "=== WIRELESS CONFIG ==="
           grep -E '^CONFIG_(MODULES|USB|WIRELESS|WLAN|CFG80211|MAC80211|WLAN_VENDOR_MEDIATEK|MT7601U)=' out/.config
 
+          grep -q '^CONFIG_MODULES=y$' out/.config
           grep -q '^CONFIG_CFG80211=m$' out/.config
           grep -q '^CONFIG_MAC80211=m$' out/.config
           grep -q '^CONFIG_MT7601U=m$' out/.config
@@ -77,6 +106,10 @@ jobs:
         working-directory: kernel
         run: |
           set -e
+
+          echo "=== BUILD TOOLCHAIN ==="
+          clang --version
+          ld.lld --version
 
           make -j2 O=out ARCH=arm64 LLVM=1 \
             Image modules
@@ -100,14 +133,17 @@ jobs:
           find out -name '*.ko' \
             -exec cp --parents {} ../release/modules/ \;
 
-          echo "=== KERNEL ==="
+          echo "=== KERNEL IMAGE ==="
           file ../release/Image
           file ../release/Image.gz
 
           echo "=== MT7601U MODULE ==="
-          find out -name 'mt7601u.ko' -exec modinfo {} \;
+          MT_MODULE=$(find out -name mt7601u.ko | head -n 1)
+          test -n "$MT_MODULE"
+          modinfo "$MT_MODULE"
 
-          find out -name 'mt7601u.ko' | grep -q .
+          echo "=== MODULE COUNT ==="
+          find out -name '*.ko' | wc -l
 
       - name: Upload kernel and modules
         uses: actions/upload-artifact@v4
