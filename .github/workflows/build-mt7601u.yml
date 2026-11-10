@@ -14,17 +14,23 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y \
             git bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
-            clang-14 lld-14 llvm-14 \
+            clang lld llvm \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu \
             kmod pahole python3 cpio
 
+          echo "=== LLVM TOOLS ==="
+          clang --version
+          ld.lld --version
+
       - name: Download Google GKI 5.10.209
         run: |
+          set -e
           TAG=android12-5.10-2024-05_r1
 
           git init kernel
@@ -42,7 +48,9 @@ jobs:
         run: |
           set -e
 
-          make O=out ARCH=arm64 LLVM=-14 gki_defconfig
+          export PATH="/usr/bin:$PATH"
+
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
           scripts/config --file out/.config \
             --enable MODULES \
@@ -56,7 +64,7 @@ jobs:
             --module MAC80211 \
             --module MT7601U
 
-          make O=out ARCH=arm64 LLVM=-14 olddefconfig
+          make O=out ARCH=arm64 LLVM=1 olddefconfig
 
           echo "=== WIRELESS CONFIG ==="
           grep -E '^CONFIG_(MODULES|USB|WIRELESS|WLAN|CFG80211|MAC80211|WLAN_VENDOR_MEDIATEK|MT7601U)=' out/.config
@@ -70,7 +78,7 @@ jobs:
         run: |
           set -e
 
-          make -j2 O=out ARCH=arm64 LLVM=-14 \
+          make -j2 O=out ARCH=arm64 LLVM=1 \
             Image modules
 
       - name: Collect build output
@@ -94,6 +102,7 @@ jobs:
 
           echo "=== KERNEL ==="
           file ../release/Image
+          file ../release/Image.gz
 
           echo "=== MT7601U MODULE ==="
           find out -name 'mt7601u.ko' -exec modinfo {} \;
