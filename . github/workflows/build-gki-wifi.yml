@@ -1,0 +1,95 @@
+name: Build GKI Kernel & Wireless Modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'Branch Kernel AOSP (contoh: android12-5.10 atau android12-5.10-lts)'
+        required: true
+        default: 'android12-5.10-lts'
+      wifi_driver_repo:
+        description: 'URL Git Driver Wi-Fi Eksternal (opsional, contoh: https://github.com)'
+        required: false
+        default: 'https://github.com'
+      wifi_driver_branch:
+        description: 'Branch Driver Wi-Fi'
+        required: false
+        default: 'v5.6.4.2'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Bersihkan Ruang Disk Runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android
+          df -h
+
+      - name: Install Dependensi Build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex git \
+            libelf-dev libssl-dev python3 tar unzip wget zip zstd pahole cpio
+
+      - name: Unduh AOSP Clang (r416183b untuk android12-5.10)
+        run: |
+          mkdir -p $HOME/clang
+          wget -q https://googlesource.com -O clang.tar.gz
+          tar -xzf clang.tar.gz -C $HOME/clang
+          rm clang.tar.gz
+
+      - name: Clone Source Kernel GKI AOSP
+        run: |
+          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} \
+            https://googlesource.com kernel
+
+      - name: Tahap 1 - Build Kernel Inti (Image) Murni Tanpa Edit Defconfig
+        working-directory: kernel
+        run: |
+          export PATH="$HOME/clang/bin:$PATH"
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 gki_defconfig
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 -j$(nproc) Image
+
+      - name: Tahap 2 - Aktifkan Subsistem Wireless sebagai Modul (=m) & Build .ko
+        working-directory: kernel
+        run: |
+          export PATH="$HOME/clang/bin:$PATH"
+          ./scripts/config --file out/.config \
+            -m RFKILL \
+            -m CFG80211 \
+            -e CFG80211_WEXT \
+            -m MAC80211 \
+            -m LIBARC4
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 olddefconfig
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 -j$(nproc) modules
+
+      - name: Tahap 3 - Build Driver Wi-Fi Eksternal (Out-of-Tree)
+        if: github.event.inputs.wifi_driver_repo != ''
+        run: |
+          export PATH="$HOME/clang/bin:$PATH"
+          git clone --depth=1 -b ${{ github.event.inputs.wifi_driver_branch }} \
+            ${{ github.event.inputs.wifi_driver_repo }} wifi_driver
+          cd wifi_driver
+          # Matikan flag platform PC dan aktifkan platform ARM64 Android jika Makefile mendukung
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile || true
+          sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile || true
+          make -C $GITHUB_WORKSPACE/kernel O=$GITHUB_WORKSPACE/kernel/out \
+            M=$GITHUB_WORKSPACE/wifi_driver ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 -j$(nproc) modules
+
+      - name: Kumpulkan Hasil Build (Image & Semua File .ko)
+        run: |
+          mkdir -p artifacts/modules
+          cp kernel/out/arch/arm64/boot/Image artifacts/
+          find kernel/out -name "*.ko" -exec cp {} artifacts/modules/ \;
+          if [ -d "wifi_driver" ]; then
+            find wifi_driver -name "*.ko" -exec cp {} artifacts/modules/ \;
+          fi
+          ls -lh artifacts/
+          ls -lh artifacts/modules/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: GKI-Kernel-And-Wifi-Modules
+          path: artifacts/
