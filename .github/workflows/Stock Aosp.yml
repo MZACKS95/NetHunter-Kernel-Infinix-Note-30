@@ -1,4 +1,3 @@
-
 name: Build Google GKI 5.10.209 - X6833B Baseline
 
 on:
@@ -71,14 +70,15 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
 
-          echo "===== CLONE AOSP CLANG ====="
+          echo "===== DOWNLOAD AOSP CLANG r416183b ====="
 
-          git clone --depth=1 \
-            --branch android12-release \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            clang-aosp
+          mkdir -p clang-aosp
+          curl -L --fail --retry 3 -o clang.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz"
+          tar -xzf clang.tar.gz -C clang-aosp
+          rm clang.tar.gz
 
-          CLANG_DIR="$GITHUB_WORKSPACE/clang-aosp/clang-r416183b"
+          CLANG_DIR="$GITHUB_WORKSPACE/clang-aosp"
 
           echo "===== VERIFY CLANG TOOLCHAIN ====="
 
