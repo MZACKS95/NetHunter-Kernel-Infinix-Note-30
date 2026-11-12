@@ -176,27 +176,18 @@ jobs:
       - name: 5. Configure Swap and Check Resources
         run: |
           set -euo pipefail
-
           echo "===== MEMORY BEFORE SWAP ====="
           free -h
-
           echo "===== DISK SPACE BEFORE SWAP ====="
-          df -h "$GITHUB_WORKSPACE"
-
+          df -h /
           echo "===== CREATE 8GB SWAP ====="
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-
+          # Pakai nama baru biar nggak tabrakan sama swap bawaan runner
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
           echo "===== MEMORY AFTER SWAP ====="
           free -h
-
-          echo "===== SWAP INFORMATION ====="
-          swapon --show
-
-          echo "===== DISK SPACE AFTER SWAP ====="
-          df -h "$GITHUB_WORKSPACE"
 
       # ==========================================
       # 6. BUILD KERNEL AND MODULES
