@@ -25,7 +25,7 @@ jobs:
         run: |
           git clone --depth=1 \
             --branch android12-5.10-2024-05_r1 \
-            https://googlesource.com/kernel/common \
+            https://android.googlesource.com/kernel/common \
             kernel_src
 
       - name: 3. Verify Source Version
