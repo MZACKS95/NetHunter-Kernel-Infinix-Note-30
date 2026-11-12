@@ -1,0 +1,108 @@
+name: Build Google GKI 5.10.209 - X6833B Baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 1. Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex \
+            git libelf-dev libssl-dev \
+            python3 python-is-python3 \
+            clang-14 lld-14 llvm-14 \
+            pahole zip
+
+      - name: 2. Clone Google Common Kernel
+        run: |
+          git clone --depth=1 \
+            --branch android12-5.10-2024-05_r1 \
+            https://googlesource.com/kernel/common \
+            kernel_src
+
+      - name: 3. Verify Source Version
+        working-directory: kernel_src
+        run: |
+          echo "=== SOURCE TAG ==="
+          git describe --tags --exact-match
+          echo "=== SOURCE COMMIT ==="
+          git rev-parse HEAD
+          echo "=== MAKEFILE VERSION ==="
+          head -5 Makefile
+
+      - name: 4. Generate Original GKI Defconfig + MTK Symbol List
+        working-directory: kernel_src
+        run: |
+          make O=out ARCH=arm64 LLVM=-14 LLVM_IAS=1 \
+            gki_defconfig
+
+          # Pertahankan daftar simbol KMI khusus MediaTek (mt6789)
+          if [ -f "android/abi_gki_aarch64_mtk" ]; then
+            ./scripts/config --file out/.config \
+              --set-str UNUSED_KSYMS_WHITELIST "android/abi_gki_aarch64_mtk" \
+              -e TRIM_UNUSED_KSYMS
+          else
+            ./scripts/config --file out/.config -d TRIM_UNUSED_KSYMS
+          fi
+
+          make O=out ARCH=arm64 LLVM=-14 LLVM_IAS=1 \
+            olddefconfig
+
+          echo "=== ORIGINAL GKI CONFIG ==="
+          grep -E \
+            'CONFIG_(ARM64|MODULES|MODVERSIONS|TRIM_UNUSED_KSYMS|UNUSED_KSYMS_WHITELIST|CFG80211|MAC80211|MT7601U|LTO_CLANG)' \
+            out/.config || true
+
+      - name: 5. Build Kernel
+        working-directory: kernel_src
+        run: |
+          export KBUILD_BUILD_VERSION=1
+
+          make -j"$(nproc)" \
+            O=out \
+            ARCH=arm64 \
+            LLVM=-14 \
+            LLVM_IAS=1 \
+            Image modules
+
+      - name: 6. Verify Build Results
+        working-directory: kernel_src
+        run: |
+          set -e
+
+          echo "=== KERNEL RELEASE ==="
+          cat out/include/config/kernel.release
+
+          echo "=== IMAGE ==="
+          ls -lh out/arch/arm64/boot/Image
+
+          echo "=== IMAGE.GZ ==="
+          gzip -c out/arch/arm64/boot/Image \
+            > out/arch/arm64/boot/Image.gz
+          ls -lh out/arch/arm64/boot/Image.gz
+
+          echo "=== MODULE SYMBOLS ==="
+          ls -lh out/Module.symvers
+
+          echo "=== FINAL CONFIG ==="
+          cp out/.config out/gki_defconfig_result
+
+      - name: 7. Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Google-GKI-5.10.209-X6833B-Baseline
+          if-no-files-found: error
+          path: |
+            kernel_src/out/arch/arm64/boot/Image
+            kernel_src/out/arch/arm64/boot/Image.gz
+            kernel_src/out/include/config/kernel.release
+            kernel_src/out/Module.symvers
+            kernel_src/out/gki_defconfig_result
