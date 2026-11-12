@@ -1,3 +1,4 @@
+
 name: Build Google GKI 5.10.209 - X6833B Baseline
 
 on:
@@ -73,8 +74,10 @@ jobs:
           echo "===== DOWNLOAD AOSP CLANG r416183b ====="
 
           mkdir -p clang-aosp
+
           curl -L --fail --retry 3 -o clang.tar.gz \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz"
+
           tar -xzf clang.tar.gz -C clang-aosp
           rm clang.tar.gz
 
@@ -168,9 +171,37 @@ jobs:
             out/.config || true
 
       # ==========================================
-      # 5. BUILD KERNEL AND MODULES
+      # 5. CONFIGURE SWAP AND CHECK RESOURCES
       # ==========================================
-      - name: 5. Build Kernel and Modules
+      - name: 5. Configure Swap and Check Resources
+        run: |
+          set -euo pipefail
+
+          echo "===== MEMORY BEFORE SWAP ====="
+          free -h
+
+          echo "===== DISK SPACE BEFORE SWAP ====="
+          df -h "$GITHUB_WORKSPACE"
+
+          echo "===== CREATE 8GB SWAP ====="
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+          echo "===== MEMORY AFTER SWAP ====="
+          free -h
+
+          echo "===== SWAP INFORMATION ====="
+          swapon --show
+
+          echo "===== DISK SPACE AFTER SWAP ====="
+          df -h "$GITHUB_WORKSPACE"
+
+      # ==========================================
+      # 6. BUILD KERNEL AND MODULES
+      # ==========================================
+      - name: 6. Build Kernel and Modules
         run: |
           set -euo pipefail
 
@@ -182,14 +213,14 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          JOBS=$(nproc)
+          JOBS=2
+          echo "Build jobs: $JOBS"
 
           echo "===== BUILD INFORMATION ====="
           echo "Kernel: $(make O=out kernelrelease)"
           echo "Architecture: arm64"
           echo "Compiler:"
           clang --version
-          echo "Build jobs: $JOBS"
 
           echo "===== START KERNEL BUILD ====="
 
@@ -216,9 +247,9 @@ jobs:
           echo "===== BUILD COMPLETED ====="
 
       # ==========================================
-      # 6. PREPARE BUILD ARTIFACTS
+      # 7. PREPARE BUILD ARTIFACTS
       # ==========================================
-      - name: 6. Prepare Kernel Artifacts
+      - name: 7. Prepare Kernel Artifacts
         run: |
           set -euo pipefail
 
@@ -277,9 +308,9 @@ jobs:
           find "$ARTIFACT_DIR" -type f -printf '%P\n'
 
       # ==========================================
-      # 7. UPLOAD BUILD ARTIFACTS
+      # 8. UPLOAD BUILD ARTIFACTS
       # ==========================================
-      - name: 7. Upload Kernel Artifacts
+      - name: 8. Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Google-GKI-5.10.209-X6833B-Baseline
@@ -288,9 +319,9 @@ jobs:
           retention-days: 14
 
       # ==========================================
-      # 8. UPLOAD BUILD LOG IF FAILED
+      # 9. UPLOAD BUILD LOG IF FAILED
       # ==========================================
-      - name: 8. Upload Build Log on Failure
+      - name: 9. Upload Build Log on Failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
