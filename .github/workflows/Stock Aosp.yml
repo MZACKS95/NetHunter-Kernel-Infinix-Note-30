@@ -1,3 +1,4 @@
+
 name: Build Google GKI 5.10.209 - X6833B Baseline
 
 on:
@@ -13,22 +14,25 @@ jobs:
     steps:
       - name: 1. Install Dependencies
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential curl flex \
-            git libelf-dev libssl-dev \
+            bc bison build-essential cpio curl flex \
+            git libelf-dev libssl-dev libncurses-dev rsync \
             python3 python-is-python3 \
             clang clang-14 lld lld-14 \
             llvm llvm-14 pahole zip
 
-          echo "=== CHECK COMPILER & LINKER ==="
+          echo "=== CHECK LLVM TOOLCHAIN ==="
           clang --version
-          clang-14 --version
-          command -v ld.lld
           ld.lld --version
+          llvm-ar --version
+          llvm-nm --version
+          llvm-strip --version
 
       - name: 2. Clone Google Common Kernel
         run: |
+          set -e
           git clone --depth=1 \
             --branch android12-5.10-2024-05_r1 \
             https://android.googlesource.com/kernel/common \
@@ -37,45 +41,42 @@ jobs:
       - name: 3. Verify Source Version
         working-directory: kernel_src
         run: |
+          set -e
           echo "=== SOURCE TAG ==="
           git describe --tags --exact-match
+
           echo "=== SOURCE COMMIT ==="
           git rev-parse HEAD
+
           echo "=== MAKEFILE VERSION ==="
           head -5 Makefile
 
-      - name: 4. Generate Original GKI Defconfig + MTK Symbol List
+      - name: 4. Generate Original GKI Defconfig
         working-directory: kernel_src
         run: |
-          make O=out ARCH=arm64 LLVM=-14 LLVM_IAS=1 \
+          set -e
+
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             gki_defconfig
 
-          # Pertahankan daftar simbol KMI khusus MediaTek (mt6789)
-          if [ -f "android/abi_gki_aarch64_mtk" ]; then
-            ./scripts/config --file out/.config \
-              --set-str UNUSED_KSYMS_WHITELIST "android/abi_gki_aarch64_mtk" \
-              -e TRIM_UNUSED_KSYMS
-          else
-            ./scripts/config --file out/.config -d TRIM_UNUSED_KSYMS
-          fi
-
-          make O=out ARCH=arm64 LLVM=-14 LLVM_IAS=1 \
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
           echo "=== ORIGINAL GKI CONFIG ==="
           grep -E \
-            'CONFIG_(ARM64|MODULES|MODVERSIONS|TRIM_UNUSED_KSYMS|UNUSED_KSYMS_WHITELIST|CFG80211|MAC80211|MT7601U|LTO_CLANG)' \
+            'CONFIG_(ARM64|MODULES|MODVERSIONS|TRIM_UNUSED_KSYMS|CFG80211|MAC80211|MT7601U|LTO_CLANG)=' \
             out/.config || true
 
       - name: 5. Build Kernel
         working-directory: kernel_src
         run: |
+          set -e
           export KBUILD_BUILD_VERSION=1
 
           make -j"$(nproc)" \
             O=out \
             ARCH=arm64 \
-            LLVM=-14 \
+            LLVM=1 \
             LLVM_IAS=1 \
             Image modules
 
@@ -85,17 +86,20 @@ jobs:
           set -e
 
           echo "=== KERNEL RELEASE ==="
+          test -f out/include/config/kernel.release
           cat out/include/config/kernel.release
 
           echo "=== IMAGE ==="
+          test -f out/arch/arm64/boot/Image
           ls -lh out/arch/arm64/boot/Image
 
           echo "=== IMAGE.GZ ==="
-          gzip -c out/arch/arm64/boot/Image \
+          gzip -n -9 -c out/arch/arm64/boot/Image \
             > out/arch/arm64/boot/Image.gz
           ls -lh out/arch/arm64/boot/Image.gz
 
           echo "=== MODULE SYMBOLS ==="
+          test -f out/Module.symvers
           ls -lh out/Module.symvers
 
           echo "=== FINAL CONFIG ==="
