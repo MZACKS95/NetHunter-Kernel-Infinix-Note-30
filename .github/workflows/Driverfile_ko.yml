@@ -32,12 +32,10 @@ jobs:
           sudo apt-get install -y bc bison build-essential ccache curl flex git \
             libelf-dev libssl-dev python3 tar unzip wget zip zstd pahole cpio
 
-      - name: Unduh AOSP Clang (r416183b untuk android12-5.10)
+      - name: Unduh AOSP Clang (r416183b dari Mirror GitHub)
         run: |
           mkdir -p $HOME/clang
-          wget -q https://googlesource.com -O clang.tar.gz
-          tar -xzf clang.tar.gz -C $HOME/clang
-          rm clang.tar.gz
+          git clone --depth=1 https://github.com $HOME/clang
 
       - name: Clone Source Kernel GKI AOSP
         run: |
@@ -71,7 +69,6 @@ jobs:
           git clone --depth=1 -b ${{ github.event.inputs.wifi_driver_branch }} \
             ${{ github.event.inputs.wifi_driver_repo }} wifi_driver
           cd wifi_driver
-          # Matikan flag platform PC dan aktifkan platform ARM64 Android jika Makefile mendukung
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile || true
           sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile || true
           make -C $GITHUB_WORKSPACE/kernel O=$GITHUB_WORKSPACE/kernel/out \
