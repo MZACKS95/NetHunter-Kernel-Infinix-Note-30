@@ -17,31 +17,47 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential cpio curl flex \
-            git libelf-dev libssl-dev libncurses-dev rsync \
+            bc bison build-essential cpio curl flex git \
+            libelf-dev libssl-dev libncurses-dev rsync \
             python3 python-is-python3 \
-            clang clang-14 lld lld-14 \
-            llvm llvm-14 pahole zip
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            zip unzip pahole
 
-          echo "=== CHECK LLVM TOOLCHAIN ==="
-          clang --version
-          ld.lld --version
-          llvm-ar --version
-          llvm-nm --version
-          llvm-strip --version
-
-      - name: 2. Clone Google Common Kernel
+      - name: 2. Clone Kernel + AOSP Clang r450784d
         run: |
           set -e
+
+          echo "=== CLONE GOOGLE COMMON KERNEL ==="
           git clone --depth=1 \
             --branch android12-5.10-2024-05_r1 \
             https://android.googlesource.com/kernel/common \
             kernel_src
 
+          echo "=== DOWNLOAD AOSP CLANG r450784d ==="
+          mkdir -p clang-aosp
+
+          curl -L --fail --retry 3 \
+            -o clang.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz"
+
+          tar -xzf clang.tar.gz -C clang-aosp
+          rm clang.tar.gz
+
+          echo "=== CHECK CLANG ==="
+          test -x clang-aosp/bin/clang
+          test -x clang-aosp/bin/ld.lld
+
+          clang-aosp/bin/clang --version
+          clang-aosp/bin/ld.lld --version
+          clang-aosp/bin/llvm-ar --version
+          clang-aosp/bin/llvm-nm --version
+          clang-aosp/bin/llvm-strip --version
+
       - name: 3. Verify Source Version
         working-directory: kernel_src
         run: |
           set -e
+
           echo "=== SOURCE TAG ==="
           git describe --tags --exact-match
 
@@ -51,15 +67,34 @@ jobs:
           echo "=== MAKEFILE VERSION ==="
           head -5 Makefile
 
+          echo "=== VERIFY KERNEL VERSION ==="
+          grep -E '^VERSION|^PATCHLEVEL|^SUBLEVEL' Makefile
+
       - name: 4. Generate Original GKI Defconfig
         working-directory: kernel_src
         run: |
           set -e
 
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$PATH"
+
+          echo "=== TOOLCHAIN VERSION ==="
+          clang --version
+          ld.lld --version
+
+          make O=out \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             gki_defconfig
 
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          make O=out \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
 
           echo "=== ORIGINAL GKI CONFIG ==="
@@ -71,14 +106,36 @@ jobs:
         working-directory: kernel_src
         run: |
           set -e
-          export KBUILD_BUILD_VERSION=1
+          set -o pipefail
 
-          make -j"$(nproc)" \
+          export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$PATH"
+          export KBUILD_BUILD_VERSION=1
+          export KBUILD_BUILD_USER="mzacks"
+          export KBUILD_BUILD_HOST="github"
+
+          JOBS=$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))
+
+          echo "=== BUILD CONFIGURATION ==="
+          echo "ARCH=arm64"
+          echo "LLVM=1"
+          echo "LLVM_IAS=1"
+          echo "JOBS=$JOBS"
+
+          make -j"$JOBS" \
             O=out \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
-            Image modules
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            Image modules 2>&1 | tee build.log
+
+          echo "=== CHECK BUILD OUTPUT ==="
+          test -f out/arch/arm64/boot/Image
+          test -f out/Module.symvers
+
+          ls -lh out/arch/arm64/boot/Image
+          ls -lh out/Module.symvers
 
       - name: 6. Verify Build Results
         working-directory: kernel_src
@@ -89,11 +146,11 @@ jobs:
           test -f out/include/config/kernel.release
           cat out/include/config/kernel.release
 
-          echo "=== IMAGE ==="
+          echo "=== KERNEL IMAGE ==="
           test -f out/arch/arm64/boot/Image
           ls -lh out/arch/arm64/boot/Image
 
-          echo "=== IMAGE.GZ ==="
+          echo "=== COMPRESSED IMAGE ==="
           gzip -n -9 -c out/arch/arm64/boot/Image \
             > out/arch/arm64/boot/Image.gz
           ls -lh out/arch/arm64/boot/Image.gz
@@ -104,6 +161,10 @@ jobs:
 
           echo "=== FINAL CONFIG ==="
           cp out/.config out/gki_defconfig_result
+          ls -lh out/gki_defconfig_result
+
+          echo "=== BUILD LOG ==="
+          ls -lh build.log
 
       - name: 7. Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -116,3 +177,13 @@ jobs:
             kernel_src/out/include/config/kernel.release
             kernel_src/out/Module.symvers
             kernel_src/out/gki_defconfig_result
+            kernel_src/build.log
+
+      - name: 8. Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Google-GKI-5.10.209-Build-Failure-Log
+          if-no-files-found: ignore
+          path: |
+            kernel_src/build.log
