@@ -12,74 +12,132 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # ==========================================
+      # 1. INSTALL BUILD DEPENDENCIES
+      # ==========================================
       - name: 1. Install Dependencies
         run: |
-          set -e
+          set -euo pipefail
+
           sudo apt-get update
+
           sudo apt-get install -y \
-            bc bison build-essential cpio curl flex git \
-            libelf-dev libssl-dev libncurses-dev rsync \
-            python3 python-is-python3 \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            zip unzip pahole
+            bc \
+            bison \
+            build-essential \
+            cpio \
+            curl \
+            flex \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            git \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            lz4 \
+            pahole \
+            python3 \
+            python-is-python3 \
+            rsync \
+            unzip \
+            zip
 
-      - name: 2. Clone Kernel + AOSP Clang r450784d
+      # ==========================================
+      # 2. CLONE GOOGLE KERNEL + AOSP CLANG
+      # ==========================================
+      - name: 2. Clone Kernel and Clang r416183b
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "=== CLONE GOOGLE COMMON KERNEL ==="
+          echo "===== CLONE GOOGLE COMMON KERNEL ====="
+
           git clone --depth=1 \
             --branch android12-5.10-2024-05_r1 \
             https://android.googlesource.com/kernel/common \
             kernel_src
 
-          echo "=== DOWNLOAD AOSP CLANG r450784d ==="
-          mkdir -p clang-aosp
+          cd kernel_src
 
-          curl -L --fail --retry 3 \
-            -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz"
-
-          tar -xzf clang.tar.gz -C clang-aosp
-          rm clang.tar.gz
-
-          echo "=== CHECK CLANG ==="
-          test -x clang-aosp/bin/clang
-          test -x clang-aosp/bin/ld.lld
-
-          clang-aosp/bin/clang --version
-          clang-aosp/bin/ld.lld --version
-          clang-aosp/bin/llvm-ar --version
-          clang-aosp/bin/llvm-nm --version
-          clang-aosp/bin/llvm-strip --version
-
-      - name: 3. Verify Source Version
-        working-directory: kernel_src
-        run: |
-          set -e
-
-          echo "=== SOURCE TAG ==="
-          git describe --tags --exact-match
-
-          echo "=== SOURCE COMMIT ==="
+          echo "===== SOURCE COMMIT ====="
           git rev-parse HEAD
 
-          echo "=== MAKEFILE VERSION ==="
-          head -5 Makefile
+          SOURCE_VERSION=$(make kernelversion)
+          echo "Kernel version: $SOURCE_VERSION"
 
-          echo "=== VERIFY KERNEL VERSION ==="
-          grep -E '^VERSION|^PATCHLEVEL|^SUBLEVEL' Makefile
+          if [ "$SOURCE_VERSION" != "5.10.209" ]; then
+            echo "ERROR: Unexpected kernel version"
+            exit 1
+          fi
 
-      - name: 4. Generate Original GKI Defconfig
-        working-directory: kernel_src
+          cd "$GITHUB_WORKSPACE"
+
+          echo "===== CLONE AOSP CLANG ====="
+
+          git clone --depth=1 \
+            --branch android12-release \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            clang-aosp
+
+          CLANG_DIR="$GITHUB_WORKSPACE/clang-aosp/clang-r416183b"
+
+          echo "===== VERIFY CLANG TOOLCHAIN ====="
+
+          test -x "$CLANG_DIR/bin/clang"
+          test -x "$CLANG_DIR/bin/ld.lld"
+          test -x "$CLANG_DIR/bin/llvm-ar"
+          test -x "$CLANG_DIR/bin/llvm-nm"
+          test -x "$CLANG_DIR/bin/llvm-strip"
+
+          "$CLANG_DIR/bin/clang" --version
+          "$CLANG_DIR/bin/ld.lld" --version
+
+          echo "$CLANG_DIR/bin" >> "$GITHUB_PATH"
+
+          echo "Clang r416183b is ready."
+
+      # ==========================================
+      # 3. VERIFY SOURCE AND TOOLCHAIN
+      # ==========================================
+      - name: 3. Verify Build Environment
         run: |
-          set -e
+          set -euo pipefail
 
-          export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$PATH"
+          echo "===== KERNEL SOURCE ====="
+          cd "$GITHUB_WORKSPACE/kernel_src"
 
-          echo "=== TOOLCHAIN VERSION ==="
+          git log -1 --oneline
+          make kernelversion
+
+          echo "===== CLANG VERSION ====="
           clang --version
+
+          echo "===== LINKER VERSION ====="
           ld.lld --version
+
+          echo "===== LLVM TOOLS ====="
+          llvm-ar --version
+          llvm-nm --version
+          llvm-strip --version
+
+          echo "===== GCC CROSS COMPILER ====="
+          aarch64-linux-gnu-gcc --version
+
+      # ==========================================
+      # 4. GENERATE GKI DEFCONFIG
+      # ==========================================
+      - name: 4. Configure GKI Defconfig
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE/kernel_src"
+
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+
+          echo "===== GENERATE GKI DEFCONFIG ====="
 
           make O=out \
             ARCH=arm64 \
@@ -89,6 +147,8 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             gki_defconfig
 
+          echo "===== OLDDEFCONFIG ====="
+
           make O=out \
             ARCH=arm64 \
             LLVM=1 \
@@ -97,29 +157,43 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
 
-          echo "=== ORIGINAL GKI CONFIG ==="
+          echo "===== CONFIGURATION CHECK ====="
+
+          test -f out/.config
+
+          cp out/.config gki_defconfig_result
+
           grep -E \
-            'CONFIG_(ARM64|MODULES|MODVERSIONS|TRIM_UNUSED_KSYMS|CFG80211|MAC80211|MT7601U|LTO_CLANG)=' \
+            'CONFIG_ARM64=|CONFIG_MODULES=|CONFIG_GKI' \
             out/.config || true
 
-      - name: 5. Build Kernel
-        working-directory: kernel_src
+      # ==========================================
+      # 5. BUILD KERNEL AND MODULES
+      # ==========================================
+      - name: 5. Build Kernel and Modules
         run: |
-          set -e
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE/kernel_src"
+
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+
+          JOBS=$(nproc)
+
+          echo "===== BUILD INFORMATION ====="
+          echo "Kernel: $(make O=out kernelrelease)"
+          echo "Architecture: arm64"
+          echo "Compiler:"
+          clang --version
+          echo "Build jobs: $JOBS"
+
+          echo "===== START KERNEL BUILD ====="
+
           set -o pipefail
-
-          export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$PATH"
-          export KBUILD_BUILD_VERSION=1
-          export KBUILD_BUILD_USER="mzacks"
-          export KBUILD_BUILD_HOST="github"
-
-          JOBS=$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))
-
-          echo "=== BUILD CONFIGURATION ==="
-          echo "ARCH=arm64"
-          echo "LLVM=1"
-          echo "LLVM_IAS=1"
-          echo "JOBS=$JOBS"
 
           make -j"$JOBS" \
             O=out \
@@ -130,60 +204,100 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             Image modules 2>&1 | tee build.log
 
-          echo "=== CHECK BUILD OUTPUT ==="
-          test -f out/arch/arm64/boot/Image
+          echo "===== VERIFY BUILD OUTPUT ====="
+
+          test -s out/arch/arm64/boot/Image
           test -f out/Module.symvers
+          test -f out/.config
 
-          ls -lh out/arch/arm64/boot/Image
-          ls -lh out/Module.symvers
+          echo "===== KERNEL RELEASE ====="
+          make O=out kernelrelease
 
-      - name: 6. Verify Build Results
-        working-directory: kernel_src
+          echo "===== BUILD COMPLETED ====="
+
+      # ==========================================
+      # 6. PREPARE BUILD ARTIFACTS
+      # ==========================================
+      - name: 6. Prepare Kernel Artifacts
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "=== KERNEL RELEASE ==="
-          test -f out/include/config/kernel.release
-          cat out/include/config/kernel.release
+          cd "$GITHUB_WORKSPACE/kernel_src"
 
-          echo "=== KERNEL IMAGE ==="
-          test -f out/arch/arm64/boot/Image
-          ls -lh out/arch/arm64/boot/Image
+          OUT_DIR="$GITHUB_WORKSPACE/kernel_src/out"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
 
-          echo "=== COMPRESSED IMAGE ==="
-          gzip -n -9 -c out/arch/arm64/boot/Image \
-            > out/arch/arm64/boot/Image.gz
-          ls -lh out/arch/arm64/boot/Image.gz
+          mkdir -p "$ARTIFACT_DIR"
+          mkdir -p "$ARTIFACT_DIR/modules"
 
-          echo "=== MODULE SYMBOLS ==="
-          test -f out/Module.symvers
-          ls -lh out/Module.symvers
+          echo "===== COPY KERNEL IMAGE ====="
 
-          echo "=== FINAL CONFIG ==="
-          cp out/.config out/gki_defconfig_result
-          ls -lh out/gki_defconfig_result
+          cp "$OUT_DIR/arch/arm64/boot/Image" \
+            "$ARTIFACT_DIR/Image"
 
-          echo "=== BUILD LOG ==="
-          ls -lh build.log
+          echo "===== CREATE IMAGE.GZ ====="
 
-      - name: 7. Upload Build Artifacts
+          gzip -n -9 -c \
+            "$OUT_DIR/arch/arm64/boot/Image" \
+            > "$ARTIFACT_DIR/Image.gz"
+
+          echo "===== COPY CONFIGURATION ====="
+
+          cp "$OUT_DIR/.config" \
+            "$ARTIFACT_DIR/kernel.config"
+
+          cp "$OUT_DIR/Module.symvers" \
+            "$ARTIFACT_DIR/Module.symvers"
+
+          echo "===== COPY KERNEL RELEASE ====="
+
+          make O=out kernelrelease \
+            > "$ARTIFACT_DIR/kernel.release"
+
+          echo "===== COLLECT MODULES ====="
+
+          (
+            cd "$OUT_DIR"
+            find . -type f -name '*.ko' \
+              -exec cp --parents {} "$ARTIFACT_DIR/modules/" \;
+          )
+
+          echo "===== BUILD INFORMATION ====="
+
+          {
+            echo "Kernel source: android12-5.10-2024-05_r1"
+            echo "Kernel version: $(make O=out kernelrelease)"
+            echo "Compiler: Clang r416183b"
+            echo "Architecture: arm64"
+            echo "Build type: GKI baseline"
+            echo "Source commit: $(git rev-parse HEAD)"
+          } > "$ARTIFACT_DIR/build-info.txt"
+
+          echo "===== ARTIFACT CONTENTS ====="
+          find "$ARTIFACT_DIR" -type f -printf '%P\n'
+
+      # ==========================================
+      # 7. UPLOAD BUILD ARTIFACTS
+      # ==========================================
+      - name: 7. Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Google-GKI-5.10.209-X6833B-Baseline
+          path: artifacts/
           if-no-files-found: error
-          path: |
-            kernel_src/out/arch/arm64/boot/Image
-            kernel_src/out/arch/arm64/boot/Image.gz
-            kernel_src/out/include/config/kernel.release
-            kernel_src/out/Module.symvers
-            kernel_src/out/gki_defconfig_result
-            kernel_src/build.log
+          retention-days: 14
 
+      # ==========================================
+      # 8. UPLOAD BUILD LOG IF FAILED
+      # ==========================================
       - name: 8. Upload Build Log on Failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Google-GKI-5.10.209-Build-Failure-Log
-          if-no-files-found: ignore
+          name: GKI-5.10.209-Build-Logs
           path: |
             kernel_src/build.log
+            kernel_src/out/.config
+            kernel_src/out/include/config/kernel.release
+          if-no-files-found: warn
+          retention-days: 7
