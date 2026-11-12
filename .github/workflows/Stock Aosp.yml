@@ -15,11 +15,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential flex \
+            bc bison build-essential curl flex \
             git libelf-dev libssl-dev \
             python3 python-is-python3 \
-            clang-14 lld-14 llvm-14 \
-            pahole zip
+            clang clang-14 lld lld-14 \
+            llvm llvm-14 pahole zip
+
+          echo "=== CHECK COMPILER & LINKER ==="
+          clang --version
+          clang-14 --version
+          command -v ld.lld
+          ld.lld --version
 
       - name: 2. Clone Google Common Kernel
         run: |
